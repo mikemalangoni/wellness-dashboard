@@ -31,6 +31,15 @@ if entries_df.empty:
     st.warning("No entries found in the document.")
     st.stop()
 
+# Global date bounds for tab date pickers
+_all_dates = pd.concat(
+    [entries_df["date"]]
+    + ([gi_events_df["date"]] if not gi_events_df.empty else [])
+    + ([exercise_df["date"]] if not exercise_df.empty else [])
+).dropna()
+_min_date = _all_dates.min().date()
+_max_date = _all_dates.max().date()
+
 # Summary strip
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Entries", len(entries_df))
@@ -57,9 +66,20 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["💤 Sleep Trends", "🫀 GI Log"
 with tab1:
     st.header("Sleep Trends")
 
+    _dr1 = st.date_input(
+        "Date range",
+        value=(_min_date, _max_date),
+        min_value=_min_date,
+        max_value=_max_date,
+        key="sleep_date_range",
+    )
+
     sleep_df = entries_df[
         ["date", "sleep_duration", "deep_min", "core_min", "rem_min", "awake_min", "hrv"]
     ].copy()
+    if len(_dr1) == 2:
+        _s1, _e1 = _dr1
+        sleep_df = sleep_df[(sleep_df["date"].dt.date >= _s1) & (sleep_df["date"].dt.date <= _e1)]
 
     has_duration = sleep_df["sleep_duration"].notna().any()
 
@@ -145,9 +165,24 @@ with tab1:
 with tab2:
     st.header("GI Log")
 
+    _dr2 = st.date_input(
+        "Date range",
+        value=(_min_date, _max_date),
+        min_value=_min_date,
+        max_value=_max_date,
+        key="gi_date_range",
+    )
+
     if gi_events_df.empty:
         st.info("No GI events logged yet.")
     else:
+        _gi2 = gi_events_df.copy()
+        _ent2 = entries_df.copy()
+        if len(_dr2) == 2:
+            _s2, _e2 = _dr2
+            _gi2 = _gi2[(_gi2["date"].dt.date >= _s2) & (_gi2["date"].dt.date <= _e2)]
+            _ent2 = _ent2[(_ent2["date"].dt.date >= _s2) & (_ent2["date"].dt.date <= _e2)]
+
         # Bristol scatter + mood & focus trendlines
         fig_bristol = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -163,8 +198,8 @@ with tab2:
         }
 
         # Bristol dots (colour-coded by score)
-        for score in sorted(gi_events_df["bristol"].dropna().unique()):
-            subset = gi_events_df[gi_events_df["bristol"] == score]
+        for score in sorted(_gi2["bristol"].dropna().unique()):
+            subset = _gi2[_gi2["bristol"] == score]
             color_hex = BRISTOL_COLORS.get(int(score), "#888888")
             fig_bristol.add_trace(
                 go.Scatter(
@@ -180,7 +215,7 @@ with tab2:
             )
 
         # Mood trendline
-        mood_data = entries_df.dropna(subset=["mood"])
+        mood_data = _ent2.dropna(subset=["mood"])
         if not mood_data.empty:
             fig_bristol.add_trace(
                 go.Scatter(
@@ -194,7 +229,7 @@ with tab2:
             )
 
         # Focus trendline
-        focus_data = entries_df.dropna(subset=["focus"])
+        focus_data = _ent2.dropna(subset=["focus"])
         if not focus_data.empty:
             fig_bristol.add_trace(
                 go.Scatter(
@@ -218,9 +253,9 @@ with tab2:
 
         # BM frequency per day + water & alcohol overlay
         bm_freq = (
-            gi_events_df.groupby("date").size().reset_index(name="bm_count")
+            _gi2.groupby("date").size().reset_index(name="bm_count")
         )
-        overlay = entries_df[["date", "water_oz", "alcohol_count"]].copy()
+        overlay = _ent2[["date", "water_oz", "alcohol_count"]].copy()
         merged = bm_freq.merge(overlay, on="date", how="left")
 
         fig_gi = make_subplots(specs=[[{"secondary_y": True}]])
@@ -276,7 +311,7 @@ with tab2:
         # Raw event table (collapsed)
         with st.expander("Raw GI events"):
             st.dataframe(
-                gi_events_df.rename(
+                _gi2.rename(
                     columns={
                         "date": "Date",
                         "time": "Time",
@@ -292,15 +327,28 @@ with tab2:
 with tab3:
     st.header("Mood & Focus")
 
+    _dr3 = st.date_input(
+        "Date range",
+        value=(_min_date, _max_date),
+        min_value=_min_date,
+        max_value=_max_date,
+        key="mood_date_range",
+    )
+
     mf_df = entries_df[["date", "mood", "focus"]].copy()
+    _gi3 = gi_events_df.copy()
+    if len(_dr3) == 2:
+        _s3, _e3 = _dr3
+        mf_df = mf_df[(mf_df["date"].dt.date >= _s3) & (mf_df["date"].dt.date <= _e3)]
+        _gi3 = _gi3[(_gi3["date"].dt.date >= _s3) & (_gi3["date"].dt.date <= _e3)]
 
     if mf_df[["mood", "focus"]].isna().all().all():
         st.info("No mood or focus data found yet.")
     else:
         # Average daily Bristol score as a GI-comfort proxy
-        if not gi_events_df.empty:
+        if not _gi3.empty:
             avg_bristol = (
-                gi_events_df.groupby("date")["bristol"]
+                _gi3.groupby("date")["bristol"]
                 .mean()
                 .reset_index(name="avg_bristol")
             )
@@ -382,17 +430,32 @@ with tab3:
 with tab4:
     st.header("Exercise & Activity")
 
+    _dr4 = st.date_input(
+        "Date range",
+        value=(_min_date, _max_date),
+        min_value=_min_date,
+        max_value=_max_date,
+        key="exercise_date_range",
+    )
+
     if exercise_df.empty:
         st.info("No exercise data found.")
     else:
+        _ex4 = exercise_df.copy()
+        _ent4 = entries_df.copy()
+        if len(_dr4) == 2:
+            _s4, _e4 = _dr4
+            _ex4 = _ex4[(_ex4["date"].dt.date >= _s4) & (_ex4["date"].dt.date <= _e4)]
+            _ent4 = _ent4[(_ent4["date"].dt.date >= _s4) & (_ent4["date"].dt.date <= _e4)]
+
         # ── Exercise × Mood correlation ───────────────────────────────────────
         daily_ex = (
-            exercise_df[exercise_df["duration_min"].notna()]
+            _ex4[_ex4["duration_min"].notna()]
             .groupby("date")["duration_min"]
             .sum()
             .reset_index(name="exercise_min")
         )
-        daily_mood = entries_df[["date", "mood"]].dropna(subset=["mood"])
+        daily_mood = _ent4[["date", "mood"]].dropna(subset=["mood"])
         ex_mood = (
             daily_ex.merge(daily_mood, on="date", how="outer")
             .sort_values("date")
@@ -491,7 +554,7 @@ with tab4:
             st.info(interp)
 
         st.divider()
-        detailed = exercise_df.copy()
+        detailed = _ex4.copy()
 
         ACTIVITY_COLORS = {
             "Strength": "#2e75b6",
@@ -598,7 +661,7 @@ with tab4:
 
         with col_stats:
             st.subheader("Summary")
-            total_days = exercise_df["date"].nunique()
+            total_days = _ex4["date"].nunique()
             active_days = detailed["date"].nunique()
             total_min = timed["duration_min"].sum() if not timed.empty else 0
             st.metric("Days with activity", f"{active_days} / {total_days}")
@@ -618,7 +681,18 @@ with tab4:
 with tab5:
     st.header("Running")
 
+    _dr5 = st.date_input(
+        "Date range",
+        value=(_min_date, _max_date),
+        min_value=_min_date,
+        max_value=_max_date,
+        key="running_date_range",
+    )
+
     runs = exercise_df[exercise_df["activity_type"] == "Run"].copy() if not exercise_df.empty else pd.DataFrame()
+    if not runs.empty and len(_dr5) == 2:
+        _s5, _e5 = _dr5
+        runs = runs[(runs["date"].dt.date >= _s5) & (runs["date"].dt.date <= _e5)]
 
     if runs.empty:
         st.info("No runs logged yet.")
