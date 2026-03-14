@@ -1,5 +1,6 @@
 """Streamlit wellness dashboard for the Spine Log."""
 
+import numpy as np
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -384,6 +385,112 @@ with tab4:
     if exercise_df.empty:
         st.info("No exercise data found.")
     else:
+        # ── Exercise × Mood correlation ───────────────────────────────────────
+        daily_ex = (
+            exercise_df[exercise_df["duration_min"].notna()]
+            .groupby("date")["duration_min"]
+            .sum()
+            .reset_index(name="exercise_min")
+        )
+        daily_mood = entries_df[["date", "mood"]].dropna(subset=["mood"])
+        ex_mood = (
+            daily_ex.merge(daily_mood, on="date", how="outer")
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+        ex_mood["exercise_min"] = ex_mood["exercise_min"].fillna(0)
+
+        if ex_mood["mood"].notna().sum() >= 5:
+            # Dual-axis line chart
+            fig_exmood = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_exmood.add_trace(
+                go.Bar(
+                    x=ex_mood["date"],
+                    y=ex_mood["exercise_min"],
+                    name="Exercise (min)",
+                    marker_color="rgba(46,117,182,0.5)",
+                ),
+                secondary_y=False,
+            )
+            mood_line = ex_mood.dropna(subset=["mood"])
+            fig_exmood.add_trace(
+                go.Scatter(
+                    x=mood_line["date"],
+                    y=mood_line["mood"],
+                    name="Mood",
+                    mode="lines+markers",
+                    line=dict(color="mediumpurple", width=2),
+                    marker=dict(size=6),
+                ),
+                secondary_y=True,
+            )
+            fig_exmood.update_layout(
+                title="Exercise Minutes vs Mood",
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            fig_exmood.update_yaxes(title_text="Exercise (min)", rangemode="tozero", secondary_y=False)
+            fig_exmood.update_yaxes(title_text="Mood (1–5)", range=[0.5, 5.5], dtick=1, secondary_y=True)
+            st.plotly_chart(fig_exmood, use_container_width=True)
+
+            # Cross-correlation at lags -3 to +3
+            ex_vals = ex_mood["exercise_min"].values
+            mood_vals = ex_mood["mood"].values
+            lags = list(range(-3, 4))
+            corrs = []
+            for lag in lags:
+                if lag >= 0:
+                    a = ex_vals[:len(ex_vals) - lag] if lag > 0 else ex_vals
+                    b = mood_vals[lag:] if lag > 0 else mood_vals
+                else:
+                    a = ex_vals[-lag:]
+                    b = mood_vals[:len(mood_vals) + lag]
+                mask = ~(np.isnan(a) | np.isnan(b))
+                if mask.sum() >= 5:
+                    corrs.append(float(np.corrcoef(a[mask], b[mask])[0, 1]))
+                else:
+                    corrs.append(0.0)
+
+            best_lag = lags[int(np.argmax(np.abs(corrs)))]
+            best_corr = corrs[lags.index(best_lag)]
+
+            bar_colors = [
+                "#2e75b6" if c >= 0 else "#e05c2a" for c in corrs
+            ]
+            fig_xcorr = go.Figure(go.Bar(
+                x=[f"Lag {l:+d}d" for l in lags],
+                y=corrs,
+                marker_color=bar_colors,
+                hovertemplate="Lag %{x}<br>Correlation: %{y:.2f}<extra></extra>",
+            ))
+            fig_xcorr.add_hline(y=0, line_color="white", line_width=1)
+            fig_xcorr.update_layout(
+                title="Cross-correlation: Exercise → Mood at Different Lags",
+                yaxis=dict(title="Pearson r", range=[-1, 1]),
+                xaxis_title="Lag (negative = mood leads exercise, positive = exercise leads mood)",
+            )
+            st.plotly_chart(fig_xcorr, use_container_width=True)
+
+            # Plain-English interpretation
+            if abs(best_corr) < 0.1:
+                interp = "No meaningful correlation between exercise and mood in this dataset yet."
+            elif best_lag == 0:
+                interp = f"Strongest correlation on the **same day** (r = {best_corr:.2f}) — exercise and mood move together."
+            elif best_lag > 0:
+                interp = (
+                    f"Exercise appears to be a **leading indicator** of mood — "
+                    f"the strongest correlation (r = {best_corr:.2f}) is at +{best_lag} day(s), "
+                    f"meaning exercise today predicts {'better' if best_corr > 0 else 'lower'} mood {best_lag} day(s) later."
+                )
+            else:
+                interp = (
+                    f"Mood appears to **precede** exercise — "
+                    f"the strongest correlation (r = {best_corr:.2f}) is at {best_lag} day(s), "
+                    f"suggesting {'higher' if best_corr > 0 else 'lower'} mood leads to more exercise {abs(best_lag)} day(s) later."
+                )
+            st.info(interp)
+
+        st.divider()
         detailed = exercise_df.copy()
 
         ACTIVITY_COLORS = {
