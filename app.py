@@ -806,6 +806,54 @@ with tab6:
         help="Negative = sleep leads GI (sleep night X affects GI day X+|lag|); 0 = same night; Positive = GI leads sleep (GI day X affects sleep night X+lag).",
     )
 
+    # ── helpers ───────────────────────────────────────────────────────────────
+    MIN_N = 5
+    NOISE_THRESHOLD = 0.2  # |r| below this → suppress as negligible
+
+    def _strength(r):
+        ar = abs(r)
+        if ar < 0.2: return "Negligible"
+        if ar < 0.4: return "Weak"
+        if ar < 0.6: return "Moderate"
+        return "Strong"
+
+    def _lag_phrase(lag):
+        if lag == 0: return "that night"
+        if lag == 1: return "the following night"
+        if lag == -1: return "the previous night"
+        return f"{lag} nights later" if lag > 0 else f"{abs(lag)} nights before"
+
+    # Plain-English phrasing for each metric when its value is higher
+    GI_PROSE = {
+        "bm_count":      "more bowel movements",
+        "avg_bristol":   "higher Bristol score (looser stools)",
+        "water_oz":      "more water intake",
+        "alcohol_count": "more alcohol",
+    }
+    SLEEP_PROSE = {
+        "sleep_duration": ("longer sleep",        "shorter sleep"),
+        "deep_min":       ("more deep sleep",     "less deep sleep"),
+        "rem_min":        ("more REM sleep",      "less REM sleep"),
+        "core_min":       ("more core sleep",     "less core sleep"),
+        "awake_min":      ("more time awake",     "less time awake"),
+        "hrv":            ("higher HRV",          "lower HRV"),
+    }
+
+    GI_METRICS = {
+        "bm_count":      "BM Count",
+        "avg_bristol":   "Avg Bristol",
+        "water_oz":      "Water (oz)",
+        "alcohol_count": "Alcohol (count)",
+    }
+    SLEEP_METRICS = {
+        "sleep_duration": "Sleep Duration (h)",
+        "deep_min":       "Deep (min)",
+        "rem_min":        "REM (min)",
+        "core_min":       "Core (min)",
+        "awake_min":      "Awake (min)",
+        "hrv":            "HRV (ms)",
+    }
+
     # ── build daily GI summary ────────────────────────────────────────────────
     if gi_events_df.empty:
         st.info("No GI data to correlate.")
@@ -822,50 +870,62 @@ with tab6:
         sleep_cols = ["date", "sleep_duration", "deep_min", "rem_min", "core_min", "awake_min", "hrv"]
         daily_sleep = entries_df[sleep_cols].copy()
 
-        # Apply lag: shift sleep dates so GI day X aligns with sleep night X+lag
         if lag != 0:
             daily_sleep = daily_sleep.copy()
             daily_sleep["date"] = daily_sleep["date"] - pd.Timedelta(days=lag)
 
         merged = daily_gi.merge(daily_sleep, on="date", how="inner")
 
-        GI_METRICS = {
-            "bm_count":      "BM Count",
-            "avg_bristol":   "Avg Bristol",
-            "water_oz":      "Water (oz)",
-            "alcohol_count": "Alcohol (count)",
-        }
-        SLEEP_METRICS = {
-            "sleep_duration": "Sleep Duration (h)",
-            "deep_min":       "Deep (min)",
-            "rem_min":        "REM (min)",
-            "core_min":       "Core (min)",
-            "awake_min":      "Awake (min)",
-            "hrv":            "HRV (ms)",
-        }
-
-        MIN_N = 5  # minimum overlapping points to show a correlation
-
-        # Build correlation matrix and annotation matrix
         gi_keys = list(GI_METRICS.keys())
         sleep_keys = list(SLEEP_METRICS.keys())
         corr_matrix = []
         annot_matrix = []
+        hover_matrix = []
+        notable = []  # (|r|, r, n, gk, sk) for plain-English callouts
 
         for gk in gi_keys:
-            row_corr, row_annot = [], []
+            row_corr, row_annot, row_hover = [], [], []
             for sk in sleep_keys:
                 pair = merged[[gk, sk]].dropna()
                 n = len(pair)
-                if n >= MIN_N:
-                    r = float(pair[gk].corr(pair[sk]))
-                    row_corr.append(r)
-                    row_annot.append(f"{r:.2f}<br>(n={n})")
-                else:
+                gl = GI_METRICS[gk]
+                sl = SLEEP_METRICS[sk]
+
+                if n < MIN_N:
                     row_corr.append(None)
-                    row_annot.append(f"n={n}<br>(insufficient)")
+                    row_annot.append(f"n={n}")
+                    row_hover.append(
+                        f"<b>{gl} × {sl}</b><br>Not enough data yet (n={n}, need {MIN_N})"
+                    )
+                else:
+                    r = float(pair[gk].corr(pair[sk]))
+                    strength = _strength(r)
+                    if abs(r) < NOISE_THRESHOLD:
+                        # Option 3: grey out negligible cells
+                        row_corr.append(None)
+                        row_annot.append(f"~ 0<br>(r={r:.2f})")
+                        row_hover.append(
+                            f"<b>{gl} × {sl}</b><br>No meaningful link (r={r:.2f}, n={n})"
+                        )
+                    else:
+                        row_corr.append(r)
+                        sign = "+" if r >= 0 else "−"
+                        # Option 1: strength label
+                        row_annot.append(f"{strength} {sign}<br>{r:.2f} (n={n})")
+                        # Option 4: plain-English hover
+                        sleep_word = SLEEP_PROSE[sk][0] if r >= 0 else SLEEP_PROSE[sk][1]
+                        row_hover.append(
+                            f"<b>{gl} × {sl}</b><br>"
+                            f"When there are {GI_PROSE[gk]}, "
+                            f"there tends to be {sleep_word} {_lag_phrase(lag)}.<br>"
+                            f"{strength} {'positive' if r >= 0 else 'negative'} link "
+                            f"(r = {r:.2f}, n = {n})"
+                        )
+                        notable.append((abs(r), r, n, gk, sk))
+
             corr_matrix.append(row_corr)
             annot_matrix.append(row_annot)
+            hover_matrix.append(row_hover)
 
         z_plot = [[v if v is not None else float("nan") for v in row] for row in corr_matrix]
 
@@ -882,11 +942,16 @@ with tab6:
             zmax=1,
             text=annot_matrix,
             texttemplate="%{text}",
-            hovertemplate="GI: %{y}<br>Sleep: %{x}<br>r = %{z:.2f}<extra></extra>",
+            customdata=hover_matrix,
+            hovertemplate="%{customdata}<extra></extra>",
             colorbar=dict(title="Pearson r", tickvals=[-1, -0.5, 0, 0.5, 1]),
         ))
 
-        lag_label = f"Lag {lag:+d}d — GI day X vs. sleep night X{lag:+d}" if lag != 0 else "Lag 0 — GI day X vs. sleep same night"
+        lag_label = (
+            f"Lag {lag:+d}d — GI day X vs. sleep night X{lag:+d}"
+            if lag != 0 else
+            "Lag 0 — GI day X vs. sleep same night"
+        )
         fig_heatmap.update_layout(
             title=lag_label,
             xaxis=dict(side="bottom", tickangle=-30),
@@ -896,6 +961,21 @@ with tab6:
         st.plotly_chart(fig_heatmap, use_container_width=True)
 
         st.caption(
-            f"Grey cells = fewer than {MIN_N} days with both metrics logged. "
-            "Blue = positive correlation, red = negative."
+            f"Grey cells = insufficient data (n < {MIN_N}) or negligible link (|r| < {NOISE_THRESHOLD}). "
+            "Blue = positive, red = negative. Hover a cell for plain-English interpretation."
         )
+
+        # ── Option 2: plain-English callout for strongest findings ────────────
+        if notable:
+            notable.sort(reverse=True)
+            st.subheader("Strongest findings")
+            for _, r, n, gk, sk in notable[:3]:
+                strength = _strength(r)
+                sleep_word = SLEEP_PROSE[sk][0] if r >= 0 else SLEEP_PROSE[sk][1]
+                direction = "positive" if r >= 0 else "negative"
+                st.markdown(
+                    f"- **{GI_METRICS[gk]} × {SLEEP_METRICS[sk]}** — "
+                    f"When there are {GI_PROSE[gk]}, there tends to be {sleep_word} "
+                    f"{_lag_phrase(lag)}. "
+                    f"*{strength} {direction} link (r = {r:.2f}, n = {n})*"
+                )
