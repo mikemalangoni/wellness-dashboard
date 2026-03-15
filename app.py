@@ -1,5 +1,7 @@
 """Streamlit wellness dashboard for the Spine Log."""
 
+from datetime import timedelta
+
 import numpy as np
 import streamlit as st
 import pandas as pd
@@ -50,7 +52,7 @@ col4.metric("GI Events", len(gi_events_df) if not gi_events_df.empty else 0)
 
 st.divider()
 
-# ── Global date range picker ──────────────────────────────────────────────────
+# ── Global date filter ────────────────────────────────────────────────────────
 
 _all_dates = pd.concat(
     [entries_df["date"]]
@@ -60,27 +62,67 @@ _all_dates = pd.concat(
 _min_date = _all_dates.min().date()
 _max_date = _all_dates.max().date()
 
-_date_range = st.date_input(
-    "Date range",
-    value=(_min_date, _max_date),
-    min_value=_min_date,
-    max_value=_max_date,
-    key="global_date_range",
+# Available months and weeks derived from the full dataset
+_months = sorted(entries_df["date"].dt.to_period("M").unique(), reverse=True)
+_week_starts = sorted(
+    {d - timedelta(days=d.weekday()) for d in entries_df["date"].dt.date},
+    reverse=True,
 )
 
-if len(_date_range) == 2:
-    _ds, _de = _date_range
-    entries_df = entries_df[
-        (entries_df["date"].dt.date >= _ds) & (entries_df["date"].dt.date <= _de)
+_mode = st.radio(
+    "Date range",
+    ["All time", "Month", "Week", "Custom"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
+if _mode == "All time":
+    _ds, _de = _min_date, _max_date
+
+elif _mode == "Month":
+    _sel_month = st.selectbox(
+        "Month",
+        _months,
+        format_func=lambda p: p.strftime("%B %Y"),
+        label_visibility="collapsed",
+    )
+    _ds = _sel_month.start_time.date()
+    _de = min(_sel_month.end_time.date(), _max_date)
+
+elif _mode == "Week":
+    _sel_week = st.selectbox(
+        "Week",
+        _week_starts,
+        format_func=lambda s: (
+            f"{s.strftime('%b %d')} – {(s + timedelta(days=6)).strftime('%b %d, %Y')}"
+        ),
+        label_visibility="collapsed",
+    )
+    _ds = _sel_week
+    _de = min(_sel_week + timedelta(days=6), _max_date)
+
+else:  # Custom
+    _date_range = st.date_input(
+        "Date range",
+        value=(_min_date, _max_date),
+        min_value=_min_date,
+        max_value=_max_date,
+        key="global_date_range",
+        label_visibility="collapsed",
+    )
+    _ds, _de = _date_range if len(_date_range) == 2 else (_min_date, _max_date)
+
+entries_df = entries_df[
+    (entries_df["date"].dt.date >= _ds) & (entries_df["date"].dt.date <= _de)
+]
+if not gi_events_df.empty:
+    gi_events_df = gi_events_df[
+        (gi_events_df["date"].dt.date >= _ds) & (gi_events_df["date"].dt.date <= _de)
     ]
-    if not gi_events_df.empty:
-        gi_events_df = gi_events_df[
-            (gi_events_df["date"].dt.date >= _ds) & (gi_events_df["date"].dt.date <= _de)
-        ]
-    if not exercise_df.empty:
-        exercise_df = exercise_df[
-            (exercise_df["date"].dt.date >= _ds) & (exercise_df["date"].dt.date <= _de)
-        ]
+if not exercise_df.empty:
+    exercise_df = exercise_df[
+        (exercise_df["date"].dt.date >= _ds) & (exercise_df["date"].dt.date <= _de)
+    ]
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["💤 Sleep Trends", "🫀 GI Log", "🧠 Mood & Focus", "🏃 Exercise", "🏅 Running", "🔗 Correlations"])
 
