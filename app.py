@@ -799,6 +799,14 @@ with tab5:
 with tab6:
     st.header("GI × Sleep Correlations")
 
+    _dr6 = st.date_input(
+        "Date range",
+        value=(_min_date, _max_date),
+        min_value=_min_date,
+        max_value=_max_date,
+        key="corr_date_range",
+    )
+
     lag = st.slider(
         "Lag (days): GI on day X vs. sleep on night X + lag",
         min_value=-2,
@@ -812,17 +820,24 @@ with tab6:
     if gi_events_df.empty:
         st.info("No GI data to correlate.")
     else:
+        _gi6 = gi_events_df.copy()
+        _ent6 = entries_df.copy()
+        if len(_dr6) == 2:
+            _s6, _e6 = _dr6
+            _gi6 = _gi6[(_gi6["date"].dt.date >= _s6) & (_gi6["date"].dt.date <= _e6)]
+            _ent6 = _ent6[(_ent6["date"].dt.date >= _s6) & (_ent6["date"].dt.date <= _e6)]
+
         daily_gi = (
-            gi_events_df.groupby("date")
+            _gi6.groupby("date")
             .agg(bm_count=("bristol", "count"), avg_bristol=("bristol", "mean"))
             .reset_index()
         )
-        hydration = entries_df[["date", "water_oz", "alcohol_count"]].copy()
+        hydration = _ent6[["date", "water_oz", "alcohol_count"]].copy()
         daily_gi = daily_gi.merge(hydration, on="date", how="left")
 
         # ── build daily sleep summary ─────────────────────────────────────────
         sleep_cols = ["date", "sleep_duration", "deep_min", "rem_min", "core_min", "awake_min", "hrv"]
-        daily_sleep = entries_df[sleep_cols].copy()
+        daily_sleep = _ent6[sleep_cols].copy()
 
         # Apply lag: shift sleep dates so GI day X aligns with sleep night X+lag
         if lag != 0:
