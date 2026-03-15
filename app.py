@@ -50,7 +50,7 @@ col4.metric("GI Events", len(gi_events_df) if not gi_events_df.empty else 0)
 
 st.divider()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["💤 Sleep Trends", "🫀 GI Log", "🧠 Mood & Focus", "🏃 Exercise", "🏅 Running"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["💤 Sleep Trends", "🫀 GI Log", "🧠 Mood & Focus", "🏃 Exercise", "🏅 Running", "🔗 Correlations"])
 
 # ── TAB 1 — Sleep Trends ──────────────────────────────────────────────────────
 
@@ -719,3 +719,116 @@ with tab5:
                 fig_cad.update_traces(marker_size=9)
                 fig_cad.update_layout(showlegend=False)
                 st.plotly_chart(fig_cad, use_container_width=True)
+
+# ── TAB 6 — Correlations ──────────────────────────────────────────────────────
+
+with tab6:
+    st.header("GI × Sleep Correlations")
+
+    lag = st.slider(
+        "Lag (days): GI on day X vs. sleep on night X + lag",
+        min_value=-2,
+        max_value=2,
+        value=0,
+        step=1,
+        help="Negative = sleep leads GI (sleep night X affects GI day X+|lag|); 0 = same night; Positive = GI leads sleep (GI day X affects sleep night X+lag).",
+    )
+
+    # ── build daily GI summary ────────────────────────────────────────────────
+    if gi_events_df.empty:
+        st.info("No GI data to correlate.")
+    else:
+        daily_gi = (
+            gi_events_df.groupby("date")
+            .agg(bm_count=("bristol", "count"), avg_bristol=("bristol", "mean"))
+            .reset_index()
+        )
+        hydration = entries_df[["date", "water_oz", "alcohol_count"]].copy()
+        daily_gi = daily_gi.merge(hydration, on="date", how="left")
+
+        # ── build daily sleep summary ─────────────────────────────────────────
+        sleep_cols = ["date", "sleep_duration", "deep_min", "rem_min", "core_min", "awake_min", "hrv"]
+        daily_sleep = entries_df[sleep_cols].copy()
+
+        # Apply lag: shift sleep dates so GI day X aligns with sleep night X+lag
+        if lag != 0:
+            daily_sleep = daily_sleep.copy()
+            daily_sleep["date"] = daily_sleep["date"] - pd.Timedelta(days=lag)
+
+        merged = daily_gi.merge(daily_sleep, on="date", how="inner")
+
+        GI_METRICS = {
+            "bm_count":      "BM Count",
+            "avg_bristol":   "Avg Bristol",
+            "water_oz":      "Water (oz)",
+            "alcohol_count": "Alcohol (count)",
+        }
+        SLEEP_METRICS = {
+            "sleep_duration": "Sleep Duration (h)",
+            "deep_min":       "Deep (min)",
+            "rem_min":        "REM (min)",
+            "core_min":       "Core (min)",
+            "awake_min":      "Awake (min)",
+            "hrv":            "HRV (ms)",
+        }
+
+        MIN_N = 5  # minimum overlapping points to show a correlation
+
+        # Build correlation matrix and N matrix
+        gi_keys = list(GI_METRICS.keys())
+        sleep_keys = list(SLEEP_METRICS.keys())
+        corr_matrix = []
+        n_matrix = []
+        annot_matrix = []
+
+        for gk in gi_keys:
+            row_corr, row_n, row_annot = [], [], []
+            for sk in sleep_keys:
+                pair = merged[[gk, sk]].dropna()
+                n = len(pair)
+                if n >= MIN_N:
+                    r = float(pair[gk].corr(pair[sk]))
+                    row_corr.append(r)
+                    row_n.append(n)
+                    row_annot.append(f"{r:.2f}<br>(n={n})")
+                else:
+                    row_corr.append(None)
+                    row_n.append(n)
+                    row_annot.append(f"n={n}<br>(insufficient)")
+            corr_matrix.append(row_corr)
+            n_matrix.append(row_n)
+            annot_matrix.append(row_annot)
+
+        # Replace None with NaN for Plotly
+        z_plot = [[v if v is not None else float("nan") for v in row] for row in corr_matrix]
+
+        fig_heatmap = go.Figure(go.Heatmap(
+            z=z_plot,
+            x=[SLEEP_METRICS[k] for k in sleep_keys],
+            y=[GI_METRICS[k] for k in gi_keys],
+            colorscale=[
+                [0.0,  "#d7191c"],
+                [0.5,  "#f7f7f7"],
+                [1.0,  "#2166ac"],
+            ],
+            zmin=-1,
+            zmax=1,
+            text=annot_matrix,
+            texttemplate="%{text}",
+            hovertemplate="GI: %{y}<br>Sleep: %{x}<br>r = %{z:.2f}<extra></extra>",
+            colorbar=dict(title="Pearson r", tickvals=[-1, -0.5, 0, 0.5, 1]),
+        ))
+
+        lag_label = f"Lag {lag:+d}d — GI day X vs. sleep night X{lag:+d}" if lag != 0 else "Lag 0 — GI day X vs. sleep same night"
+        fig_heatmap.update_layout(
+            title=lag_label,
+            xaxis=dict(side="bottom", tickangle=-30),
+            yaxis=dict(autorange="reversed"),
+            height=340,
+        )
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+
+        st.caption(
+            f"Grey cells = fewer than {MIN_N} days with both metrics logged. "
+            "Blue = positive correlation, red = negative."
+        )
