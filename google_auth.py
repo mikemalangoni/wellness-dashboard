@@ -24,13 +24,14 @@ def get_credentials() -> Credentials:
     # ── Cloud path: load from Streamlit secrets ────────────────────────────────
     try:
         import streamlit as st
-        token_data = json.loads(st.secrets["token_json"])
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        return creds
-    except Exception:
-        pass  # fall through to local file path
+        if "token_json" in st.secrets:
+            token_data = json.loads(st.secrets["token_json"])
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            return creds
+    except ImportError:
+        pass  # not running in Streamlit, fall through to local file path
 
     # ── Local path: read/write token.json ─────────────────────────────────────
     creds: Credentials | None = None
