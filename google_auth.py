@@ -1,5 +1,6 @@
 """Google OAuth 2.0 authentication for the Spine Log wellness dashboard."""
 
+import json
 import os
 from pathlib import Path
 
@@ -17,10 +18,21 @@ TOKEN_FILE = str(_BASE_DIR / "token.json")
 def get_credentials() -> Credentials:
     """Return valid OAuth credentials, refreshing or re-authorising as needed.
 
-    On the first run this opens a browser tab for the user to grant access.
-    The resulting token is saved to token.json so subsequent runs skip the
-    browser step.
+    In cloud deployments, credentials are loaded from Streamlit secrets
+    (token_json key). Locally, falls back to token.json / credentials.json files.
     """
+    # ── Cloud path: load from Streamlit secrets ────────────────────────────────
+    try:
+        import streamlit as st
+        token_data = json.loads(st.secrets["token_json"])
+        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        return creds
+    except Exception:
+        pass  # fall through to local file path
+
+    # ── Local path: read/write token.json ─────────────────────────────────────
     creds: Credentials | None = None
 
     if os.path.exists(TOKEN_FILE):
