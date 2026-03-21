@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.stats import pearsonr
 
 from spine_parser import get_dataframes
 
@@ -74,6 +75,7 @@ _mode = st.radio(
     ["All time", "Month", "Week", "Custom"],
     horizontal=True,
     label_visibility="collapsed",
+    key="global_date_mode",
 )
 
 if _mode == "All time":
@@ -85,6 +87,7 @@ elif _mode == "Month":
         _months,
         format_func=lambda p: p.strftime("%B %Y"),
         label_visibility="collapsed",
+        key="global_date_month",
     )
     _ds = _sel_month.start_time.date()
     _de = min(_sel_month.end_time.date(), _max_date)
@@ -97,6 +100,7 @@ elif _mode == "Week":
             f"{s.strftime('%b %d')} – {(s + timedelta(days=6)).strftime('%b %d, %Y')}"
         ),
         label_visibility="collapsed",
+        key="global_date_week",
     )
     _ds = _sel_week
     _de = min(_sel_week + timedelta(days=6), _max_date)
@@ -124,11 +128,21 @@ if not exercise_df.empty:
         (exercise_df["date"].dt.date >= _ds) & (exercise_df["date"].dt.date <= _de)
     ]
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["💤 Sleep Trends", "🫀 GI Log", "🧠 Mood & Focus", "🏃 Exercise", "🏅 Running", "🔗 Correlations"])
+_TAB_NAMES = ["💤 Sleep Trends", "🫀 GI Log", "🧠 Mood & Focus", "🏃 Exercise", "🏅 Running", "🔗 Correlations"]
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = _TAB_NAMES[0]
+_active_tab = st.radio(
+    "Tab",
+    _TAB_NAMES,
+    index=_TAB_NAMES.index(st.session_state.active_tab),
+    horizontal=True,
+    label_visibility="collapsed",
+    key="active_tab",
+)
 
 # ── TAB 1 — Sleep Trends ──────────────────────────────────────────────────────
 
-with tab1:
+if _active_tab == "💤 Sleep Trends":
     st.header("Sleep Trends")
 
     sleep_df = entries_df[
@@ -216,7 +230,7 @@ with tab1:
 
 # ── TAB 2 — GI Log ───────────────────────────────────────────────────────────
 
-with tab2:
+if _active_tab == "🫀 GI Log":
     st.header("GI Log")
 
     if gi_events_df.empty:
@@ -361,7 +375,7 @@ with tab2:
 
 # ── TAB 3 — Mood & Focus ─────────────────────────────────────────────────────
 
-with tab3:
+if _active_tab == "🧠 Mood & Focus":
     st.header("Mood & Focus")
 
     mf_df = entries_df[["date", "mood", "focus"]].copy()
@@ -451,7 +465,7 @@ with tab3:
 
 # ── TAB 4 — Exercise ─────────────────────────────────────────────────────────
 
-with tab4:
+if _active_tab == "🏃 Exercise":
     st.header("Exercise & Activity")
 
     if exercise_df.empty:
@@ -687,7 +701,7 @@ with tab4:
 
 # ── TAB 5 — Running ───────────────────────────────────────────────────────────
 
-with tab5:
+if _active_tab == "🏅 Running":
     st.header("Running")
 
     runs = exercise_df[exercise_df["activity_type"] == "Run"].copy() if not exercise_df.empty else pd.DataFrame()
@@ -794,21 +808,12 @@ with tab5:
 
 # ── TAB 6 — Correlations ──────────────────────────────────────────────────────
 
-with tab6:
-    st.header("GI × Sleep Correlations")
-
-    lag = st.slider(
-        "Lag (days): GI on day X vs. sleep on night X + lag",
-        min_value=-2,
-        max_value=2,
-        value=0,
-        step=1,
-        help="Negative = sleep leads GI (sleep night X affects GI day X+|lag|); 0 = same night; Positive = GI leads sleep (GI day X affects sleep night X+lag).",
-    )
+if _active_tab == "🔗 Correlations":
+    st.header("Correlation Explorer")
 
     # ── helpers ───────────────────────────────────────────────────────────────
     MIN_N = 5
-    NOISE_THRESHOLD = 0.2  # |r| below this → suppress as negligible
+    NOISE_THRESHOLD = 0.2
 
     def _strength(r):
         ar = abs(r)
@@ -817,165 +822,261 @@ with tab6:
         if ar < 0.6: return "Moderate"
         return "Strong"
 
-    def _lag_phrase(lag):
-        if lag == 0: return "that night"
-        if lag == 1: return "the following night"
-        if lag == -1: return "the previous night"
-        return f"{lag} nights later" if lag > 0 else f"{abs(lag)} nights before"
+    def _explain(mi, mj, r, lag):
+        """Return a plain-English sentence explaining the correlation."""
+        direction = "higher" if r >= 0 else "lower"
+        opposite = "lower" if r >= 0 else "higher"
+        if lag == 0:
+            return (
+                f"When {mi} is higher, {mj} tends to be {direction} on the same day."
+            )
+        elif lag > 0:
+            return (
+                f"When {mi} is higher on day D, {mj} tends to be {direction} {lag} day(s) later."
+            )
+        else:
+            return (
+                f"When {mi} is higher, {mj} {abs(lag)} day(s) earlier tended to be {direction}."
+            )
 
-    # Plain-English phrasing for each metric when its value is higher
-    GI_PROSE = {
-        "bm_count":      "more bowel movements",
-        "avg_bristol":   "higher Bristol score (looser stools)",
-        "water_oz":      "more water intake",
-        "alcohol_count": "more alcohol",
-    }
-    SLEEP_PROSE = {
-        "sleep_duration": ("longer sleep",        "shorter sleep"),
-        "deep_min":       ("more deep sleep",     "less deep sleep"),
-        "rem_min":        ("more REM sleep",      "less REM sleep"),
-        "core_min":       ("more core sleep",     "less core sleep"),
-        "awake_min":      ("more time awake",     "less time awake"),
-        "hrv":            ("higher HRV",          "lower HRV"),
-    }
-
-    GI_METRICS = {
-        "bm_count":      "BM Count",
-        "avg_bristol":   "Avg Bristol",
-        "water_oz":      "Water (oz)",
-        "alcohol_count": "Alcohol (count)",
-    }
-    SLEEP_METRICS = {
-        "sleep_duration": "Sleep Duration (h)",
-        "deep_min":       "Deep (min)",
-        "rem_min":        "REM (min)",
-        "core_min":       "Core (min)",
-        "awake_min":      "Awake (min)",
-        "hrv":            "HRV (ms)",
-    }
-
-    # ── build daily GI summary ────────────────────────────────────────────────
-    if gi_events_df.empty:
-        st.info("No GI data to correlate.")
-    else:
+    # ── build unified daily_df from all sources ───────────────────────────────
+    if not gi_events_df.empty:
         daily_gi = (
             gi_events_df.groupby("date")
             .agg(bm_count=("bristol", "count"), avg_bristol=("bristol", "mean"))
             .reset_index()
         )
-        hydration = entries_df[["date", "water_oz", "alcohol_count"]].copy()
-        daily_gi = daily_gi.merge(hydration, on="date", how="left")
+    else:
+        daily_gi = pd.DataFrame(columns=["date", "bm_count", "avg_bristol"])
 
-        # ── build daily sleep summary ─────────────────────────────────────────
-        sleep_cols = ["date", "sleep_duration", "deep_min", "rem_min", "core_min", "awake_min", "hrv"]
-        daily_sleep = entries_df[sleep_cols].copy()
+    if not exercise_df.empty:
+        daily_ex = (
+            exercise_df.groupby("date")
+            .agg(exercise_min=("duration_min", "sum"), exercise_count=("activity_raw", "count"))
+            .reset_index()
+        )
+    else:
+        daily_ex = pd.DataFrame(columns=["date", "exercise_min", "exercise_count"])
 
-        if lag != 0:
-            daily_sleep = daily_sleep.copy()
-            daily_sleep["date"] = daily_sleep["date"] - pd.Timedelta(days=lag)
+    _ent_cols = ["date", "sleep_duration", "deep_min", "rem_min", "hrv",
+                 "water_oz", "alcohol_count", "mood", "focus"]
+    daily_df = entries_df[_ent_cols].copy()
+    daily_df = daily_df.merge(daily_gi, on="date", how="left")
+    daily_df = daily_df.merge(daily_ex, on="date", how="left")
+    daily_df = daily_df.sort_values("date").reset_index(drop=True)
 
-        merged = daily_gi.merge(daily_sleep, on="date", how="inner")
+    METRIC_DEFS = {
+        "Mood (1–5)":              "mood",
+        "Focus (1–5)":             "focus",
+        "Sleep Duration (hrs)":    "sleep_duration",
+        "Deep Sleep (min)":        "deep_min",
+        "REM Sleep (min)":         "rem_min",
+        "HRV (ms)":                "hrv",
+        "BM Frequency":            "bm_count",
+        "BM Quality (Bristol)":    "avg_bristol",
+        "Water Intake (oz)":       "water_oz",
+        "Alcohol (drinks)":        "alcohol_count",
+        "Exercise Duration (min)": "exercise_min",
+        "Exercise Sessions":       "exercise_count",
+    }
 
-        gi_keys = list(GI_METRICS.keys())
-        sleep_keys = list(SLEEP_METRICS.keys())
-        corr_matrix = []
-        annot_matrix = []
-        hover_matrix = []
-        notable = []  # (|r|, r, n, gk, sk) for plain-English callouts
+    # ── shared lag control ────────────────────────────────────────────────────
+    lag = st.slider(
+        "Lag (days) — column/Y metric is measured this many days after the row/X metric",
+        min_value=-7,
+        max_value=7,
+        value=0,
+        step=1,
+        help="0 = same day. +1 = the column (or Y) metric is from the day after the row (or X) metric.",
+        key="corr_lag",
+    )
 
-        for gk in gi_keys:
-            row_corr, row_annot, row_hover = [], [], []
-            for sk in sleep_keys:
-                pair = merged[[gk, sk]].dropna()
-                n = len(pair)
-                gl = GI_METRICS[gk]
-                sl = SLEEP_METRICS[sk]
+    # Build a date-shifted copy for lag computations.
+    # Shifting date backward by lag means: when merged on date, each row pairs
+    # the base metric on day D with the lagged metric on day D+lag.
+    lagged_daily = daily_df.copy()
+    if lag != 0:
+        lagged_daily["date"] = lagged_daily["date"] - pd.Timedelta(days=lag)
 
-                if n < MIN_N:
-                    row_corr.append(None)
-                    row_annot.append(f"n={n}")
-                    row_hover.append(
-                        f"<b>{gl} × {sl}</b><br>Not enough data yet (n={n}, need {MIN_N})"
-                    )
+    # ── SECTION 1 — Configurable Correlation Matrix ───────────────────────────
+    st.subheader("Correlation Matrix")
+    default_metrics = [
+        "Mood (1–5)", "Sleep Duration (hrs)", "BM Frequency",
+        "BM Quality (Bristol)", "HRV (ms)", "Water Intake (oz)",
+    ]
+    selected_metrics = st.multiselect(
+        "Select metrics to include in the matrix",
+        options=list(METRIC_DEFS.keys()),
+        default=default_metrics,
+        key="corr_matrix_metrics",
+    )
+
+    if len(selected_metrics) < 2:
+        st.info("Select at least 2 metrics to show the correlation matrix.")
+    else:
+        n_metrics = len(selected_metrics)
+        _mat_cols = [METRIC_DEFS[m] for m in selected_metrics]
+
+        # Merge base and lagged on date; suffixes always applied to avoid collisions
+        merged_mat = (
+            daily_df[["date"] + _mat_cols]
+            .merge(
+                lagged_daily[["date"] + _mat_cols],
+                on="date",
+                how="inner",
+                suffixes=("_x", "_y"),
+            )
+        )
+
+        z, annot, hover = [], [], []
+        for mi in selected_metrics:
+            row_z, row_annot, row_hover = [], [], []
+            ci_x = METRIC_DEFS[mi] + "_x"
+            for mj in selected_metrics:
+                if mi == mj and lag == 0:
+                    row_z.append(float("nan"))
+                    row_annot.append("—")
+                    row_hover.append(f"<b>{mi}</b>")
                 else:
-                    r = float(pair[gk].corr(pair[sk]))
-                    strength = _strength(r)
-                    if abs(r) < NOISE_THRESHOLD:
-                        # Option 3: grey out negligible cells
-                        row_corr.append(None)
-                        row_annot.append(f"~ 0<br>(r={r:.2f})")
+                    cj_y = METRIC_DEFS[mj] + "_y"
+                    pair = merged_mat[[ci_x, cj_y]].dropna()
+                    n = len(pair)
+                    if n < MIN_N:
+                        row_z.append(float("nan"))
+                        row_annot.append(f"n={n}")
                         row_hover.append(
-                            f"<b>{gl} × {sl}</b><br>No meaningful link (r={r:.2f}, n={n})"
+                            f"<b>{mi} × {mj}</b><br>Not enough data (n={n}, need {MIN_N})"
                         )
                     else:
-                        row_corr.append(r)
-                        sign = "+" if r >= 0 else "−"
-                        # Option 1: strength label
-                        row_annot.append(f"{strength} {sign}<br>{r:.2f} (n={n})")
-                        # Option 4: plain-English hover
-                        sleep_word = SLEEP_PROSE[sk][0] if r >= 0 else SLEEP_PROSE[sk][1]
-                        row_hover.append(
-                            f"<b>{gl} × {sl}</b><br>"
-                            f"When there are {GI_PROSE[gk]}, "
-                            f"there tends to be {sleep_word} {_lag_phrase(lag)}.<br>"
-                            f"{strength} {'positive' if r >= 0 else 'negative'} link "
-                            f"(r = {r:.2f}, n = {n})"
-                        )
-                        notable.append((abs(r), r, n, gk, sk))
+                        r = float(pair[ci_x].corr(pair[cj_y]))
+                        strength = _strength(r)
+                        if abs(r) < NOISE_THRESHOLD:
+                            row_z.append(float("nan"))
+                            row_annot.append(f"≈0\n(r={r:.2f})")
+                            row_hover.append(
+                                f"<b>{mi} × {mj}</b><br>No meaningful link (r={r:.2f}, n={n})"
+                            )
+                        else:
+                            row_z.append(r)
+                            sign = "+" if r >= 0 else "−"
+                            row_annot.append(f"{strength} {sign}\n{r:.2f} (n={n})")
+                            row_hover.append(
+                                f"<b>{mi} × {mj}</b><br>"
+                                f"{strength} {'positive' if r >= 0 else 'negative'} link<br>"
+                                f"r = {r:.2f}, n = {n}<br><br>"
+                                f"<i>{_explain(mi, mj, r, lag)}</i>"
+                            )
+            z.append(row_z)
+            annot.append(row_annot)
+            hover.append(row_hover)
 
-            corr_matrix.append(row_corr)
-            annot_matrix.append(row_annot)
-            hover_matrix.append(row_hover)
-
-        z_plot = [[v if v is not None else float("nan") for v in row] for row in corr_matrix]
-
-        fig_heatmap = go.Figure(go.Heatmap(
-            z=z_plot,
-            x=[SLEEP_METRICS[k] for k in sleep_keys],
-            y=[GI_METRICS[k] for k in gi_keys],
+        lag_label = (
+            f"Lag {lag:+d}d — row metric (day D) × column metric (day D{lag:+d})"
+            if lag != 0 else
+            "Lag 0 — same-day correlations"
+        )
+        fig_matrix = go.Figure(go.Heatmap(
+            z=z,
+            x=selected_metrics,
+            y=selected_metrics,
             colorscale=[
-                [0.0,  "#d7191c"],
-                [0.5,  "#f7f7f7"],
-                [1.0,  "#2166ac"],
+                [0.0, "#d7191c"],
+                [0.5, "#f7f7f7"],
+                [1.0, "#2166ac"],
             ],
             zmin=-1,
             zmax=1,
-            text=annot_matrix,
+            text=annot,
             texttemplate="%{text}",
-            customdata=hover_matrix,
+            customdata=hover,
             hovertemplate="%{customdata}<extra></extra>",
             colorbar=dict(title="Pearson r", tickvals=[-1, -0.5, 0, 0.5, 1]),
         ))
-
-        lag_label = (
-            f"Lag {lag:+d}d — GI day X vs. sleep night X{lag:+d}"
-            if lag != 0 else
-            "Lag 0 — GI day X vs. sleep same night"
-        )
-        fig_heatmap.update_layout(
+        fig_matrix.update_layout(
             title=lag_label,
             xaxis=dict(side="bottom", tickangle=-30),
             yaxis=dict(autorange="reversed"),
-            height=340,
+            height=max(340, n_metrics * 70),
         )
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-
+        st.plotly_chart(fig_matrix, use_container_width=True)
         st.caption(
-            f"Grey cells = insufficient data (n < {MIN_N}) or negligible link (|r| < {NOISE_THRESHOLD}). "
-            "Blue = positive, red = negative. Hover a cell for plain-English interpretation."
+            f"Grey/white cells = insufficient data (n < {MIN_N}) or negligible link (|r| < {NOISE_THRESHOLD}). "
+            "Blue = positive, red = negative. Hover a cell for details."
+            + (f" With lag {lag:+d}d: column metric is from {lag} day(s) after the row metric." if lag != 0 else "")
         )
 
-        # ── Option 2: plain-English callout for strongest findings ────────────
-        if notable:
-            notable.sort(reverse=True)
-            st.subheader("Strongest findings")
-            for _, r, n, gk, sk in notable[:3]:
-                strength = _strength(r)
-                sleep_word = SLEEP_PROSE[sk][0] if r >= 0 else SLEEP_PROSE[sk][1]
-                direction = "positive" if r >= 0 else "negative"
-                st.markdown(
-                    f"- **{GI_METRICS[gk]} × {SLEEP_METRICS[sk]}** — "
-                    f"When there are {GI_PROSE[gk]}, there tends to be {sleep_word} "
-                    f"{_lag_phrase(lag)}. "
-                    f"*{strength} {direction} link (r = {r:.2f}, n = {n})*"
-                )
+    # ── SECTION 2 — Scatter Plot Drill-Down ───────────────────────────────────
+    st.subheader("Explore a Pair")
+    metric_keys = list(METRIC_DEFS.keys())
+    sc_col1, sc_col2 = st.columns(2)
+    x_label = sc_col1.selectbox("X-axis metric", metric_keys, index=0, key="scatter_x")
+    y_label = sc_col2.selectbox("Y-axis metric", metric_keys, index=2, key="scatter_y")
+
+    if x_label == y_label:
+        st.info("Select two different metrics to explore their relationship.")
+    else:
+        xc = METRIC_DEFS[x_label]
+        yc = METRIC_DEFS[y_label]
+
+        # Merge base (X) with lagged (Y) so each row pairs X on day D with Y on day D+lag
+        scatter_pair = (
+            daily_df[["date", xc]]
+            .merge(lagged_daily[["date", yc]], on="date", how="inner")
+            .dropna(subset=[xc, yc])
+        )
+        n_scatter = len(scatter_pair)
+
+        if n_scatter < MIN_N:
+            st.info(f"Not enough overlapping data to plot (n={n_scatter}, need {MIN_N}).")
+        else:
+            r_val, p_val = pearsonr(scatter_pair[xc], scatter_pair[yc])
+            strength = _strength(r_val)
+
+            dates_num = (scatter_pair["date"] - scatter_pair["date"].min()).dt.days
+            coeffs = np.polyfit(scatter_pair[xc], scatter_pair[yc], 1)
+            x_sorted = np.sort(scatter_pair[xc].values)
+            trend_y = np.polyval(coeffs, x_sorted)
+
+            p_str = f"{p_val:.3f}" if p_val >= 0.001 else "<0.001"
+            lag_note = f" (lag {lag:+d}d)" if lag != 0 else ""
+            title = (
+                f"{x_label} × {y_label}{lag_note} — "
+                f"{strength} {'positive' if r_val >= 0 else 'negative'} link  "
+                f"r = {r_val:.2f}, p = {p_str}, n = {n_scatter}"
+            )
+
+            fig_scatter = go.Figure()
+            fig_scatter.add_trace(go.Scatter(
+                x=scatter_pair[xc],
+                y=scatter_pair[yc],
+                mode="markers",
+                marker=dict(
+                    color=dates_num,
+                    colorscale="Viridis",
+                    showscale=True,
+                    colorbar=dict(title="Days since first"),
+                    size=9,
+                    opacity=0.85,
+                ),
+                customdata=scatter_pair["date"].dt.strftime("%Y-%m-%d"),
+                hovertemplate=(
+                    f"<b>%{{customdata}}</b><br>{x_label}: %{{x}}<br>{y_label}: %{{y}}<extra></extra>"
+                ),
+                name="Data",
+            ))
+            fig_scatter.add_trace(go.Scatter(
+                x=x_sorted,
+                y=trend_y,
+                mode="lines",
+                line=dict(color="rgba(255,255,255,0.7)", width=2, dash="dash"),
+                name="Trend",
+                hoverinfo="skip",
+            ))
+            fig_scatter.update_layout(
+                title=title,
+                xaxis_title=x_label,
+                yaxis_title=y_label,
+                height=480,
+                showlegend=False,
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
