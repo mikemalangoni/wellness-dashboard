@@ -6,7 +6,7 @@ A personal Streamlit dashboard that reads from a Google Doc ("Spine Log") via th
 ## Key files
 - `google_auth.py` — OAuth 2.0 desktop flow; saves `token.json` on first run
 - `spine_parser.py` — fetches and parses the Google Doc into structured DataFrames
-- `app.py` — five-tab Streamlit dashboard
+- `app.py` — six-tab Streamlit dashboard
 - `Dockerfile` + `entrypoint.sh` — production container; credentials injected at runtime from Fly secrets
 - `fly.toml` — Fly.io deployment config
 - `.github/workflows/fly-deploy.yml` — auto-deploys to Fly on push to `main`
@@ -36,6 +36,7 @@ A personal Streamlit dashboard that reads from a Google Doc ("Spine Log") via th
 3. **Mood & Focus** — mood/focus over time, avg Bristol overlay, Pearson correlation
 4. **Exercise** — exercise/mood correlation chart, cross-correlation at lags -3 to +3, activity sessions, pie breakdown
 5. **Running** — distance, pace (inverted axis, MM:SS format), HR, cadence with LOWESS trendlines
+6. **Correlations** — configurable correlation heatmap across all metrics (mood, sleep, GI, HRV, water, alcohol, exercise); lag slider -7 to +7 days; plain-English tooltip explanations per pair
 
 ## Deployment
 - Live at: https://wellness.malangoni.com
