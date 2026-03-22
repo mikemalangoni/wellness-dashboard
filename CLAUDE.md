@@ -4,17 +4,14 @@
 A personal Streamlit dashboard that reads from a Google Doc ("Spine Log") via the Google Docs API and visualizes health/wellness data over time.
 
 ## Key files
-- `google_auth.py` — OAuth 2.0 desktop flow; saves `token.json` on first run
+- `google_auth.py` — OAuth 2.0; loads from Streamlit secrets in production, falls back to `token.json` locally
 - `spine_parser.py` — fetches and parses the Google Doc into structured DataFrames
 - `app.py` — six-tab Streamlit dashboard
-- `Dockerfile` + `entrypoint.sh` — production container; credentials injected at runtime from Fly secrets
-- `fly.toml` — Fly.io deployment config
-- `.github/workflows/fly-deploy.yml` — auto-deploys to Fly on push to `main`
 
 ## Google Doc
 - Doc ID: `1HVFwRoAInOMjZ_FMwsrdMt7HKCXjsVpV_EEwdGOQxUo`
 - OAuth scope: `https://www.googleapis.com/auth/documents.readonly`
-- `credentials.json` and `token.json` are gitignored; stored as Fly secrets in production
+- `credentials.json` and `token.json` are gitignored; `token_json` stored as a Streamlit secret in production
 
 ## Spine Log entry format (v2, March 2026)
 - Entries wrapped in `═══` separator lines above and below the header
@@ -39,15 +36,14 @@ A personal Streamlit dashboard that reads from a Google Doc ("Spine Log") via th
 6. **Correlations** — configurable correlation heatmap across all metrics (mood, sleep, GI, HRV, water, alcohol, exercise); lag slider -7 to +7 days; plain-English tooltip explanations per pair
 
 ## Deployment
-- Live at: https://wellness.malangoni.com
-- Hosted on Fly.io, app: `wellness-malangoni`
-- Cloudflare Access gates it with one-time PIN to owner's email
-- Deploy manually: `eval "$(/opt/homebrew/bin/brew shellenv)" && fly deploy`
-- Auto-deploy: push/merge to `main` triggers GitHub Actions
+- Hosted on Streamlit Community Cloud (free tier)
+- Private — viewer authentication restricted to owner's email
+- Auto-deploys on push to `main`
+- To refresh Google token: run `refresh_token.py` locally, then update `token_json` in Streamlit app secrets
 
 ## Local development
 - Run: `wellness` (shell alias → `cd ~/projects/wellness-dashboard && streamlit run app.py`)
-- Branch workflow: feature branch → test locally → `fly deploy` to test in prod → merge to main
+- Branch workflow: feature branch → test locally → merge to main (auto-deploys)
 
 ## Key conventions
 - Parser is defensive — bad chunks are silently skipped, never crash
