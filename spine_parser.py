@@ -36,7 +36,7 @@ Missing / not-logged fields are returned as None, never as 0.
 """
 
 import re
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -104,6 +104,60 @@ def _not_logged(value: str) -> bool:
     return bool(_NOT_LOGGED_RE.search(value))
 
 
+_URGENCY_MAP = {"low": 1, "moderate": 2, "high": 3}
+
+
+def _normalize_urgency(s: str) -> Optional[int]:
+    return _URGENCY_MAP.get(s.strip().lower())
+
+
+def _parse_time_of_day(s: str) -> Optional[time]:
+    """Parse a time string into a time object.
+
+    Handles:
+      12-hour: "11:23pm", "6:47 am", "11:23 PM"
+      24-hour: "23:23", "06:47"
+    Returns None if the string cannot be parsed.
+    """
+    s = s.strip().lower()
+    m = re.match(r"(\d{1,2}):(\d{2})\s*(am|pm)$", s)
+    if m:
+        hour, minute, meridiem = int(m.group(1)), int(m.group(2)), m.group(3)
+        if meridiem == "pm" and hour != 12:
+            hour += 12
+        elif meridiem == "am" and hour == 12:
+            hour = 0
+        try:
+            return time(hour, minute)
+        except ValueError:
+            return None
+    m = re.match(r"(\d{1,2}):(\d{2})$", s)
+    if m:
+        try:
+            return time(int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
+    return None
+
+
+def _bed_datetime(entry_date: date, bed_time: time) -> datetime:
+    """Return a full datetime for bed time.
+
+    Rule: if bed hour >= 12 (afternoon/evening), the person went to bed the
+    night *before* the entry date — e.g., an entry for 2026-03-14 with
+    bed=11:23pm means the night of 2026-03-13.  If bed hour < 12 (e.g., 1am),
+    it's early morning of the entry date itself.
+    """
+    if bed_time.hour >= 12:
+        return datetime.combine(entry_date - timedelta(days=1), bed_time)
+    return datetime.combine(entry_date, bed_time)
+
+
+def _wake_datetime(entry_date: date, wake_time: time) -> datetime:
+    """Return a full datetime for wake time (always the entry date)."""
+    return datetime.combine(entry_date, wake_time)
+
+
 # ── document fetching ─────────────────────────────────────────────────────────
 
 
@@ -166,6 +220,9 @@ def _parse_sleep(lines: list[str]) -> dict:
         "core_min": None,
         "rem_min": None,
         "awake_min": None,
+        "deep_pct": None,
+        "rem_pct": None,
+        "core_pct": None,
         "hrv": None,
     }
 
@@ -180,8 +237,8 @@ def _parse_sleep(lines: list[str]) -> dict:
             line, re.IGNORECASE,
         )
         if m:
-            result["bed_time"] = m.group(1).strip()
-            result["wake_time"] = m.group(2).strip()
+            result["bed_time"] = _parse_time_of_day(m.group(1).strip())
+            result["wake_time"] = _parse_time_of_day(m.group(2).strip())
             continue
 
         # Separate bed/wake lines (fallback)
@@ -189,14 +246,14 @@ def _parse_sleep(lines: list[str]) -> dict:
         if m:
             val = m.group(1).strip()
             if not _not_logged(val):
-                result["bed_time"] = val
+                result["bed_time"] = _parse_time_of_day(val)
             continue
 
         m = re.match(r"Wake(?:\s*time)?\s*[:\-]\s*(.+)", line, re.IGNORECASE)
         if m:
             val = m.group(1).strip()
             if not _not_logged(val):
-                result["wake_time"] = val
+                result["wake_time"] = _parse_time_of_day(val)
             continue
 
         # Duration: "Duration: 7.4 hrs | Apple Watch"  or  "Duration (hrs): 8.0"
@@ -237,6 +294,15 @@ def _parse_sleep(lines: list[str]) -> dict:
         m = re.match(r"HRV\s*[:\-]\s*([\d.]+)", line, re.IGNORECASE)
         if m:
             result["hrv"] = _safe_float(m.group(1))
+
+    # Compute sleep stage percentages from tracked minutes
+    stage_total = sum(
+        v for v in [result["deep_min"], result["core_min"], result["rem_min"], result["awake_min"]]
+        if v is not None
+    )
+    if stage_total > 0:
+        for key, pct_key in [("deep_min", "deep_pct"), ("rem_min", "rem_pct"), ("core_min", "core_pct")]:
+            result[pct_key] = round(result[key] / stage_total, 4) if result[key] is not None else None
 
     return result
 
@@ -297,9 +363,9 @@ def _parse_gi(lines: list[str]) -> tuple[dict, list[dict]]:
         if m:
             events.append(
                 {
-                    "time": m.group(1).strip(),
+                    "event_time": _parse_time_of_day(m.group(1).strip()),
                     "bristol": _safe_int(m.group(2)),
-                    "urgency": m.group(3).strip() if m.group(3) else None,
+                    "urgency": _normalize_urgency(m.group(3)) if m.group(3) else None,
                 }
             )
 
@@ -369,10 +435,11 @@ _DETAIL_RE = re.compile(
 )
 
 
-def _parse_exercise(lines: list[str]) -> list[dict]:
-    """Return one dict per activity event in the EXERCISE section."""
+def _parse_exercise(lines: list[str]) -> tuple[list[dict], bool]:
+    """Return (events, rest_day) for the EXERCISE section."""
     events: list[dict] = []
     current: Optional[dict] = None
+    rest_day = False
 
     for raw in lines:
         is_indented = raw != raw.lstrip()
@@ -386,6 +453,8 @@ def _parse_exercise(lines: list[str]) -> list[dict]:
         if not is_detail:
             # Skip rest days, not-logged markers, and bare "Activity" placeholders
             if _EXERCISE_SKIP_RE.match(line):
+                if re.search(r"rest\s+day", line, re.IGNORECASE):
+                    rest_day = True
                 if current is not None:
                     events.append(current)
                     current = None
@@ -449,7 +518,7 @@ def _parse_exercise(lines: list[str]) -> list[dict]:
     if current is not None:
         events.append(current)
 
-    return events
+    return events, rest_day
 
 
 def _parse_mood(lines: list[str]) -> dict:
@@ -520,10 +589,16 @@ def _parse_entry(chunk: str) -> Optional[dict]:
 
     # Parse sections
     sleep_data = _parse_sleep(sections.get("SLEEP", []))
+
+    # Promote bed/wake time objects to full datetimes now that we have entry_date
+    if sleep_data["bed_time"] is not None:
+        sleep_data["bed_time"] = _bed_datetime(entry_date, sleep_data["bed_time"])
+    if sleep_data["wake_time"] is not None:
+        sleep_data["wake_time"] = _wake_datetime(entry_date, sleep_data["wake_time"])
     gi_fields, gi_events = _parse_gi(sections.get("GI", []))
     food_fields = _extract_water_alcohol(sections.get("FOOD & BEVERAGE", []))
     mood_data = _parse_mood(sections.get("MOOD & FOCUS", []))
-    exercise_events = _parse_exercise(sections.get("EXERCISE", []))
+    exercise_events, rest_day = _parse_exercise(sections.get("EXERCISE", []))
 
     # Water / alcohol: prefer GI section, fall back to FOOD & BEVERAGE
     water_oz = (
@@ -551,6 +626,7 @@ def _parse_entry(chunk: str) -> Optional[dict]:
         "alcohol_count": alcohol_count,
         "alcohol_desc": alcohol_desc,
         **mood_data,
+        "rest_day": rest_day,
         "_gi_events": gi_events,
         "_exercise_events": exercise_events,
     }

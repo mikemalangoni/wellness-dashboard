@@ -1,0 +1,28 @@
+name: Nightly Ingest
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC = 02:00 ET / 01:00 EDT
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ingest
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+        run: python ingest.py

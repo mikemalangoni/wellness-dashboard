@@ -30,8 +30,17 @@ def get_credentials() -> Credentials:
             if creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             return creds
-    except ImportError:
-        pass  # not running in Streamlit, fall through to local file path
+    except Exception:
+        pass  # not running in Streamlit or no secrets file, fall through
+
+    # ── CI / env var path: TOKEN_JSON environment variable ────────────────────
+    token_json_env = os.environ.get("TOKEN_JSON")
+    if token_json_env:
+        token_data = json.loads(token_json_env)
+        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        return creds
 
     # ── Local path: read/write token.json ─────────────────────────────────────
     creds: Credentials | None = None
