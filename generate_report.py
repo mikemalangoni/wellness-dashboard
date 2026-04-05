@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SKILL_PATH = Path(__file__).parent / ".claude" / "wellness_analysis.md"
+SKILL_PATH = Path(__file__).parent / "prompts" / "wellness_analysis.md"
 MODEL = "gpt-4o-mini"  # free via GitHub Models; swap to "gpt-4o" for more capability
 GITHUB_MODELS_ENDPOINT = "https://models.inference.ai.azure.com"
 MIN_ENTRIES = 4  # skip report generation if fewer than this many entries this week
