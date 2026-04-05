@@ -1,4 +1,4 @@
-name: Nightly Ingest
+name: Nightly Ingest + Report
 
 on:
   schedule:
@@ -26,3 +26,25 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
         run: python ingest.py
+
+  generate-report:
+    runs-on: ubuntu-latest
+    needs: ingest          # only runs if ingest succeeds
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate weekly report
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python generate_report.py
