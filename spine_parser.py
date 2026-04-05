@@ -104,7 +104,7 @@ def _not_logged(value: str) -> bool:
     return bool(_NOT_LOGGED_RE.search(value))
 
 
-_URGENCY_MAP = {"low": 1, "moderate": 2, "high": 3}
+_URGENCY_MAP = {"low": 1, "moderate": 2, "medium": 2, "high": 3}
 
 
 def _normalize_urgency(s: str) -> Optional[int]:
@@ -132,6 +132,13 @@ def _parse_time_of_day(s: str) -> Optional[time]:
         except ValueError:
             return None
     m = re.match(r"(\d{1,2}):(\d{2})$", s)
+    if m:
+        try:
+            return time(int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
+    # HHMM without colon, e.g. "1130"
+    m = re.match(r"(\d{2})(\d{2})$", s)
     if m:
         try:
             return time(int(m.group(1)), int(m.group(2)))
@@ -310,7 +317,7 @@ def _parse_sleep(lines: list[str]) -> dict:
 # GI event: "07:05: Bristol 5 | urgency: low"
 #           "8:00 AM — Bristol 4 — some note"   (legacy / alternate)
 _GI_EVENT_RE = re.compile(
-    r"(\d{1,2}:\d{2}(?:\s*[aApP][mM])?)\s*[:\-–—]\s*Bristol\s*(\d)"
+    r"(\d{1,2}:\d{2}(?:\s*[aApP][mM])?|\d{4})\s*[:\-–—]\s*Bristol\s*(\d)"
     r"(?:\s*[|—\-–]\s*urgency\s*[:\-]\s*(.+))?",
     re.IGNORECASE,
 )
