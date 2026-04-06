@@ -46,5 +46,5 @@ jobs:
       - name: Generate weekly report
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_MODELS_TOKEN }}
         run: python generate_report.py
